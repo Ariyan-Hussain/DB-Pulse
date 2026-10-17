@@ -247,53 +247,71 @@ The advanced-feature development run completed with **60 passing tests**. Test r
 Check the working tree for whitespace issues with:
 
 ```powershell
-git diff --check
+Set-Location 'C:\path\to\DB-Pulse'
+py -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+Copy-Item .env.example .env
+notepad .env
 ```
 
-## Security Considerations
+Use your local MySQL host, port, username, and password in `.env`; set `DB_NAME=db_pulse_meta`. Do not share `.env` or commit it. `.env.example` contains placeholders only. If `.venv` already exists, skip the `py -m venv .venv` line. The requirements include the runtime packages and pytest for project tests.
 
-- Keep `.env`, passwords, and other secrets out of version control.
-- Use a dedicated MySQL account with least-privilege permissions.
-- Avoid exposing the development API publicly without appropriate authentication and access controls.
-- Query analysis and input validation do not replace database permissions or a properly secured environment.
-- Treat database metadata and monitoring output as potentially sensitive.
-- Keep backup files in a restricted directory and use disposable test data for preflight checks.
-- Do not interpret backup preflight success as proof of a successful restore.
+Initialize the history table only if it is not already present. The SQL shown earlier in this README is scoped to `db_pulse_meta.db_pulse_metric_snapshots` and uses `CREATE TABLE IF NOT EXISTS`; it does not drop or alter anything. Use an account that has permission to read monitoring metadata and `SELECT`/`INSERT` on this table for the corresponding history operations.
 
-## Current Limitations
+Start the API:
 
-- Query-plan analysis supports a deliberately restricted SQL subset.
-- Slow-query analysis uses heuristics rather than a complete SQL optimizer or live workload profiler.
-- Schema audits require an initialized baseline.
-- Historical metric snapshots are manually triggered.
-- Backup verification is preflight-only; sandbox restore verification is not implemented.
-- Monitoring visibility depends on the MySQL permissions and metrics available to the configured account.
+```powershell
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --reload
+```
 
-## Future Improvements
+Open `http://127.0.0.1:8000/docs`. Stop the server with Ctrl+C. To run the full automated suite:
 
-- Implement a safely isolated sandbox restore-verification workflow.
-- Add optional scheduled metric collection.
-- Improve query diagnostics with richer execution-plan interpretation.
-- Add authentication, role-based access control, and audit logging.
-- Expand integration tests against disposable MySQL instances.
-- Add deployment guidance and operational monitoring.
+```powershell
+.\.venv\Scripts\python.exe -m pytest -q
+```
 
-## Learning Outcomes
+### Endpoint guide and example calls
 
-This project demonstrates practical work with:
+| Endpoint | Database needed? | What to try in Swagger |
+| --- | --- | --- |
+| `GET /` | No | Basic project welcome response. |
+| `GET /health` | No | Confirms the API process responds; it is not a MySQL health check. |
+| `GET /monitoring` | Yes | Reads connection counts, uptime, and available cumulative query counters. |
+| `GET /locks` | Yes | Reads currently visible transactions and lock waits; results depend on permissions and activity. |
+| `POST /slow-queries/analyze` | No | Submit JSON such as `{"query":"SELECT * FROM users"}`; this is text analysis and does not execute SQL. |
+| `GET /partitions` | Yes | Reads partition metadata in the selected schema; empty output can be normal. |
+| `POST /history/snapshots` | Yes, with insert permission | Explicitly collects metrics and writes one DB-Pulse history row. Returns HTTP 201 on success. |
+| `GET /history/snapshots?limit=5` | Yes, with select permission | Lists recent snapshots; `limit` must be 1–100 and defaults to 20. Empty history returns an empty list. |
+| `GET /alerts` | Yes | Evaluates configured rules against current metrics and, when possible, the latest snapshot. It does not save history. |
 
-- REST API development using FastAPI.
-- MySQL metadata and server monitoring.
-- SQL query analysis and execution-plan inspection.
-- Database schema comparison.
-- SQLAlchemy connection pool diagnostics.
-- Threshold-based alerting and historical metric storage.
-- Automated testing and Git-based development workflows.
+A successful `GET /health` response has `status` and `project` fields. Monitoring, lock, and partition response values are specific to the connected server and schema, so use the live Swagger response rather than memorized sample values. The alert response example above illustrates the documented field meanings; its numbers are illustrative only. Error responses use HTTP validation errors for invalid inputs, HTTP 409 if history is pointed at a different schema, and safe generic HTTP 503 messages for database connectivity or permission failures.
 
-## License
+### Feature limitations
 
-No license has been specified yet. If you intend to make DB-Pulse open source, add an appropriate `LICENSE` file and update this section.
+- Health is limited to metrics exposed by the current MySQL account and queries. Missing values remain unavailable.
+- Several status counters and connection figures are server-wide. Query counters accumulate since server start; a per-minute comparison is only an average across comparable saved snapshots.
+- Lock inspection is a point-in-time view and depends on MySQL visibility permissions. It is not a complete historical deadlock report.
+- Partition inspection reports metadata, not partition performance. Table statistics may be approximate or stale.
+- Slow-query analysis is a simple text heuristic, not an execution plan or SQL parser. It never submits the supplied statement to MySQL.
+- History has explicit saves, no scheduler, retention policy, or cleanup endpoint. The only history writes target the DB-Pulse table.
+- Alerts are investigation signals, not proof of failure or an automatic repair system.
 
----
+### Common troubleshooting
 
-**DB-Pulse — Making MySQL monitoring and database operations easier to inspect through a single API.**
+- **Cannot connect / HTTP 503:** verify the `MySQL80` service is running, check `DB_HOST`, `DB_PORT`, `DB_NAME`, and `DB_USER` in the local `.env`, and confirm the user/password locally. Do not paste the password into a terminal transcript or issue report.
+- **Access denied / missing lock details:** the MySQL account may need additional read or metadata visibility grants. Grant only the minimum access required, through your normal local MySQL administration process; DB-Pulse does not change grants.
+- **History table missing:** run the documented `CREATE TABLE IF NOT EXISTS` statement against `db_pulse_meta`. Check `DB_NAME=db_pulse_meta` and the table's `SELECT`/`INSERT` permissions.
+- **HTTP 422:** Swagger input or a query parameter failed validation; read the response's field-level explanation and use an allowed value.
+- **HTTP 409 on history/alerts:** these operations intentionally require the selected database to be `db_pulse_meta`.
+- **Port conflict:** start with `--port 8001` and open `http://127.0.0.1:8001/docs`.
+- **PowerShell blocks activation:** skip activation and use the explicit `.\.venv\Scripts\python.exe -m ...` commands above.
+
+### Interview talking points
+
+- **Why FastAPI?** It provides typed request handling, input validation, generated OpenAPI documentation, and a simple way to organize API routes.
+- **How is monitoring safe?** Monitoring paths use read-only queries. The one history write is explicit and limited to DB-Pulse's own table.
+- **How are alerts evaluated?** The alert route reuses the shared collector, validates thresholds, and compares cumulative query counters only when history provides a usable interval.
+- **How are database failures tested?** Automated tests mock database calls to exercise API success and failure paths without depending on a live MySQL server; live permissions still need a separate local check.
+- **What would you add next?** A configurable retention policy and an optional scheduler could be considered after the current manual snapshot flow is well tested and clearly documented.
+
+For a timed walkthrough, see [`DEMO_GUIDE.md`](DEMO_GUIDE.md).

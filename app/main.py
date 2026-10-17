@@ -8,15 +8,30 @@ from collections.abc import AsyncIterator
 from fastapi import FastAPI
 
 from app.database import engine
-from app.routes import alerts, history, locks, monitoring, partitions, slow_queries
+from app.pool_monitor import clear_checkout_tracking
+from app.routes import (
+    alerts,
+    backup_verification,
+    history,
+    locks,
+    monitoring,
+    partitions,
+    pool_monitor,
+    query_explain,
+    schema_drift,
+    slow_queries,
+)
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     """Release the SQLAlchemy connection pool when the API shuts down."""
-    yield
-    if engine is not None:
-        engine.dispose()
+    try:
+        yield
+    finally:
+        clear_checkout_tracking()
+        if engine is not None:
+            engine.dispose()
 
 
 app = FastAPI(
@@ -28,6 +43,10 @@ app = FastAPI(
 app.include_router(monitoring.router)
 app.include_router(locks.router)
 app.include_router(slow_queries.router)
+app.include_router(query_explain.router)
+app.include_router(schema_drift.router)
+app.include_router(pool_monitor.router)
+app.include_router(backup_verification.router)
 app.include_router(partitions.router)
 app.include_router(history.router)
 app.include_router(alerts.router)
