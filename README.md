@@ -274,3 +274,74 @@ A successful `GET /health` response has `status` and `project` fields. Monitorin
 - **What would you add next?** A configurable retention policy and an optional scheduler could be considered after the current manual snapshot flow is well tested and clearly documented.
 
 For a timed walkthrough, see [`DEMO_GUIDE.md`](DEMO_GUIDE.md).
+
+## Advanced operations modules
+
+These additions are independent API modules and do not replace the original heuristic endpoint `POST /slow-queries/analyze`.
+
+### `POST /queries/explain`
+
+Submits JSON such as `{"query":"SELECT id, name FROM users WHERE id = 10"}`. DB-Pulse validates a conservative single-`SELECT` subset and issues MySQL `EXPLAIN` to return optimizer plan rows, including fields like table, access type, possible/selected keys, and estimated rows when MySQL supplies them. It never executes the submitted SELECT and never uses `EXPLAIN ANALYZE`. Empty input, oversize input, comments, multiple statements, non-SELECT, CTEs, qualified identifiers (including other database names), and selected side-effect or unsupported tokens are rejected. This is intentionally conservative and not a complete SQL parser. Plans are estimates, not measured execution behavior. Use a least-privilege MySQL account.
+
+### Schema drift baseline and audit
+
+Before using `POST /schema-drift/baseline`, initialize this DB-Pulse-owned table if absent. It stores versioned schema metadata only; it does not modify monitored application tables:
+
+```sql
+CREATE TABLE IF NOT EXISTS `db_pulse_meta`.`db_pulse_schema_baselines` (
+    `id` BIGINT NOT NULL AUTO_INCREMENT,
+    `created_at` DATETIME(6) NOT NULL,
+    `schema_name` VARCHAR(64) NOT NULL,
+    `metadata_json` JSON NOT NULL,
+    PRIMARY KEY (`id`),
+    KEY `idx_db_pulse_schema_baselines_created_at` (`created_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+```
+
+`POST /schema-drift/baseline` creates the first baseline. Replacing the approved reference requires explicit JSON `{"confirm_replace":true}`; prior versions are retained. `GET /schema-drift/audit` compares the newest baseline with current columns in the configured schema and reports added/removed tables and columns plus changed type, nullability, default, key, or position fields. Defaults for credential-related columns or credential-looking strings are redacted in the saved baseline and response. The baseline table itself is excluded. The service account needs metadata read access and `SELECT`/`INSERT` on this dedicated table. Drift reports structural differences only; they do not identify who changed a schema or whether the change was unauthorized. Audit does not repair anything.
+
+### `GET /pool/status`
+
+Reads supported counters directly from the existing SQLAlchemy pool without opening a connection: pool size, checked-out/in connections, overflow, timeout, and an estimated utilization percentage when a finite capacity is available. `DB_PULSE_POOL_WARNING_PERCENT` defaults to 75; `DB_PULSE_POOL_CRITICAL_PERCENT` defaults to 90 and must be greater than warning (both range 1–100). Unsupported statistics are `null`. SQLAlchemy checkout/checkin events track only active connection-record IDs and aggregate durations, not connection objects or unbounded history; hooks are detached on app shutdown. Pool pressure is a signal, not proof of a connection leak. Existing pool settings are unchanged.
+
+### `POST /backups/verify` (preflight only)
+
+Submit `{"backup_filename":"daily.sql"}`. Configure `DB_PULSE_BACKUP_DIR` to an existing local directory. DB-Pulse accepts only a filename inside that directory, resolves it to reject escapes, allows a non-empty UTF-8 `.sql` file up to `DB_PULSE_BACKUP_MAX_BYTES` (default 100 MiB, maximum 10 GiB), and checks whether the `mysql` client exists. `DB_PULSE_BACKUP_TIMEOUT_SECONDS` defaults to 60 and is reserved for a future restore workflow.
+
+**Restore verification is not implemented.** The endpoint never invokes a subprocess, parses or executes SQL, creates a database, or performs cleanup. A successful preflight means only that basic file checks and the client availability check passed. Untrusted SQL dumps can contain dangerous statements. Any future restore implementation must use a dedicated disposable database, separate restricted credentials, strong isolation, confirmation, bounded execution, and sandbox-only cleanup. No sandbox restore credentials are currently read or required.
+
+### Advanced-module tests and Swagger
+
+The four modules include mocked/pure unit tests so these checks do not require a live MySQL instance or restore. Run all tests with `\.venv\Scripts\python.exe -m pytest -q`, then open `/docs` and try `POST /queries/explain`, `POST /schema-drift/baseline`, `GET /schema-drift/audit`, `GET /pool/status`, and `POST /backups/verify`. Schema drift requires its explicit table initialization; backup preflight requires a configured backup folder and a test SQL file. Do not use an untrusted dump as a demonstration artifact.
+
+
+### Example responses for the advanced routes
+
+The values below are illustrative response shapes, not claims about the current MySQL instance.
+
+`POST /queries/explain`:
+
+```json
+{"plan":[{"id":1,"select_type":"SIMPLE","table":"users","type":"const","possible_keys":"PRIMARY","key":"PRIMARY","rows":1}],"warnings":["Estimated row counts are optimizer estimates, not measured rows or runtime."],"read_only":true,"explain_analyze_used":false,"limitations":["EXPLAIN reports optimizer estimates and does not guarantee actual runtime performance."]}
+```
+
+`GET /pool/status`:
+
+```json
+{"status":"normal","statistics":{"pool_size":5,"checked_out":1,"checked_in":4,"overflow":0,"configured_timeout_seconds":10,"capacity_estimate":10,"utilization_percent":10.0},"checkout_duration":{"available":true,"active_tracked":1,"longest_active_seconds":0.02,"longest_completed_seconds":0.15},"thresholds":{"warning_percent":75.0,"critical_percent":90.0},"read_only":true}
+```
+
+`POST /backups/verify` (preflight only):
+
+```json
+{"status":"preflight_complete","backup_filename":"daily.sql","size_bytes":128,"maximum_size_bytes":104857600,"file_type":"plain UTF-8 SQL text (basic check only)","mysql_client_available":true,"configured_timeout_seconds":60,"preflight_passed":true,"restore_implemented":false,"restore_performed":false}
+```
+
+A schema audit response includes the baseline id, UTC audit timestamp, and a `differences` object with added/removed tables and columns, changed columns, and an `unchanged` flag. No baseline returns HTTP 404; a repeated baseline save without `confirm_replace=true` returns HTTP 409.
+
+
+Example `GET /schema-drift/audit` response shape (differences vary by the live schema):
+
+```json
+{"baseline_id":1,"baseline_created_at":"2026-10-17T10:00:00Z","audited_at":"2026-10-17T10:05:00Z","schema":"db_pulse_meta","differences":{"added_tables":[],"removed_tables":[],"added_columns":[],"removed_columns":[],"changed_columns":[],"unchanged":true},"note":"Metadata comparison reports structural differences; it cannot identify who made a change or whether it was unauthorized without separate MySQL audit logs."}
+```

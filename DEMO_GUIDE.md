@@ -67,3 +67,9 @@ These tests mock database access where applicable and are separate from checking
 - **History endpoints return an initialization/permission error:** check that the documented DB-Pulse history table exists in `db_pulse_meta` and that the account can select and insert as needed.
 - **No lock rows, partition rows, or alerts:** explain that these describe the current server/schema and rules; empty output can be expected.
 - **Port 8000 is occupied:** stop the other local app or start DB-Pulse using `--port 8001`, then use `http://127.0.0.1:8001/docs`.
+
+## Optional advanced-module demo (2–3 minutes)
+
+If time permits, try `GET /pool/status` to show the current application's SQLAlchemy pool; this reads in-process pool counters and does not open another database connection. The EXPLAIN demo accepts only a conservative SELECT subset and returns estimates, not query execution results. If you initialized the schema-baseline table, call `POST /schema-drift/baseline` once, then `GET /schema-drift/audit`; a second baseline requires `{"confirm_replace":true}` and creates a new version.
+
+The backup route is **preflight only**. Configure `DB_PULSE_BACKUP_DIR` to a folder containing a disposable UTF-8 `.sql` fixture, then POST only its filename to `/backups/verify`. The endpoint does not restore or execute the dump. Do not use a valuable or untrusted dump as a demo fixture.
