@@ -1,209 +1,250 @@
-# DB-Pulse
+# DB-Pulse — MySQL Monitoring & Database Operations Toolkit
 
-DB-Pulse is a backend-only FastAPI project for MySQL 8 monitoring. It reports selected health metrics, current transactions and lock waits, partition metadata, text-only slow-query suggestions, explicit historical metric snapshots, and read-only health alerts. It does not execute submitted SQL, kill transactions, modify partitions, or change MySQL server settings.
+**DB-Pulse** is a Python-based database monitoring and operations toolkit built with FastAPI and MySQL. It provides database monitoring metrics, transaction and lock visibility, query performance analysis, schema drift detection, connection pool monitoring, threshold-based alerts, and backup verification preflight checks through a REST API.
 
-## Architecture
+The project is designed to make common database administration and diagnostic tasks easier to inspect and demonstrate through a single API interface.
 
-- `app/main.py` creates the FastAPI app, includes routers, and closes the SQLAlchemy pool on shutdown.
-- `app/database.py` loads `.env` from the project folder and creates a pooled SQLAlchemy engine using PyMySQL.
-- `app/metrics.py` is the shared read-only collector for MySQL connection, uptime, and query counters.
-- `app/alerting.py` validates alert thresholds and evaluates rules using current metrics and an existing snapshot.
-- `app/models.py` defines DB-Pulse's history table model. It does not create tables automatically.
-- `app/routes/` contains the monitoring, lock, analyzer, partition, history, and alert endpoints.
-- `tests/` contains API tests and mocked database tests.
+## Key Features
 
-## Requirements and Windows setup
+### 1. Database Monitoring
+- Retrieves MySQL server metrics and global status counters.
+- Reports connection information, server uptime, and connection utilization.
+- Exposes monitoring information through REST API endpoints.
 
-Requirements: Windows 10/11, Python 3.10+, and MySQL Server 8.0. In PowerShell, open the DB-Pulse folder and activate its environment:
+### 2. Transaction and Lock Monitoring
+- Provides visibility into available MySQL transaction and lock information.
+- Helps investigate potential blocking and database contention.
+- Supports database troubleshooting and diagnostics.
+
+### 3. Slow Query Analysis
+- Analyzes submitted query text using heuristic checks.
+- Identifies potential performance concerns and query-pattern issues.
+- Does not execute submitted SQL as part of the heuristic analysis.
+
+### 4. Query Execution Plan Analysis
+- Provides a dedicated endpoint for MySQL `EXPLAIN` estimates.
+- Accepts a conservative subset of single `SELECT` statements.
+- Rejects unsupported query patterns and multiple statements.
+- Does not use `EXPLAIN ANALYZE`.
+
+**Note:** `EXPLAIN` provides an estimated execution plan; it does not guarantee actual query performance.
+
+### 5. Schema Drift Detection
+- Captures versioned database schema metadata baselines.
+- Compares the current schema against a saved baseline.
+- Reports detected structural differences.
+- Requires explicit confirmation before replacing an existing baseline with a new version.
+
+The schema-drift baseline table must be initialized before using the audit endpoint.
+
+### 6. Connection Pool Monitoring
+- Reports supported SQLAlchemy connection pool statistics.
+- Tracks checked-out connections and related pool information where supported.
+- Evaluates configured thresholds to help identify possible connection pressure.
+
+### 7. Backup Verification Preflight
+- Checks backup-file prerequisites within a configured backup directory.
+- Validates file size and basic SQL text format.
+- Checks whether the MySQL client is available.
+
+**Current limitation:** This feature performs preflight checks only. It does not restore a backup or verify that a restored database is functional.
+
+### 8. Alerts and Historical Metrics
+- Evaluates configured thresholds for supported monitoring metrics.
+- Exposes database alerts through the API.
+- Stores metric snapshots for historical inspection.
+- Supports manually triggered snapshots; automatic scheduled collection is not currently implemented.
+
+## Technology Stack
+
+| Technology | Purpose |
+|---|---|
+| Python | Core application logic |
+| FastAPI | REST API framework |
+| MySQL 8 | Database server and metadata source |
+| SQLAlchemy | Database connectivity and connection pooling |
+| PyMySQL | MySQL driver |
+| python-dotenv | Local environment configuration |
+| Pytest | Automated testing |
+| HTTPX | API testing support |
+
+## Project Structure
+
+```text
+DB-Pulse/
+├── app/
+│   ├── main.py
+│   ├── database.py
+│   ├── metrics.py
+│   ├── models.py
+│   ├── schemas.py
+│   ├── alerting.py
+│   ├── query_explain.py
+│   ├── schema_drift.py
+│   ├── pool_monitor.py
+│   ├── backup_verification.py
+│   └── routes/
+│       ├── alerts.py
+│       ├── history.py
+│       ├── locks.py
+│       ├── monitoring.py
+│       ├── partitions.py
+│       ├── slow_queries.py
+│       ├── query_explain.py
+│       ├── schema_drift.py
+│       ├── pool_monitor.py
+│       └── backup_verification.py
+├── tests/
+├── .env.example
+├── .gitignore
+├── requirements.txt
+├── DEMO_GUIDE.md
+└── README.md
+```
+
+## Getting Started
+
+### Prerequisites
+
+Install the following before running DB-Pulse:
+
+- Python 3.11 or another Python version supported by the installed dependencies.
+- MySQL 8.x.
+- Git.
+- A MySQL account with the permissions required by the endpoints you intend to use.
+
+### 1. Clone the repository
+
+```bash
+git clone https://github.com/Ariyan-Hussain/DB-Pulse.git
+cd DB-Pulse
+```
+
+To try the latest advanced features before they are merged into `main`:
+
+```bash
+git switch feature/advanced-db-ops
+```
+
+### 2. Create a virtual environment
+
+**Windows PowerShell:**
 
 ```powershell
+python -m venv .venv
 .\.venv\Scripts\Activate.ps1
+```
+
+If PowerShell blocks activation, you can use the environment's Python executable directly instead.
+
+### 3. Install dependencies
+
+```powershell
 python -m pip install -r requirements.txt
 ```
 
-If `.venv` does not exist, create it with `py -m venv .venv`. If PowerShell blocks activation, run `.\.venv\Scripts\python.exe` in place of `python`.
+### 4. Configure environment variables
 
-## Database configuration
+Create a local `.env` file based on `.env.example` and fill in the appropriate local values.
 
-The app reads `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, and `DB_PASSWORD` from `.env` in the project folder. History and alert comparison are restricted to `db_pulse_meta`. For a fresh local setup, copy and edit the example without sharing the password:
+Example configuration format:
 
-```powershell
-Copy-Item .env.example .env
-notepad .env
+```dotenv
+DB_HOST=localhost
+DB_PORT=3306
+DB_USER=your_database_user
+DB_PASSWORD=your_database_password
+DB_NAME=db_pulse_meta
 ```
 
-Set `DB_NAME=db_pulse_meta`. The app's schema metric queries use the selected schema; some server status and transaction metrics are MySQL-wide. `.env` is ignored by Git.
+Use your actual local configuration values. Never commit `.env` or publish database credentials.
 
-### Initialize the history table
+Some optional features may require additional environment variables. Refer to the corresponding sections below and `DEMO_GUIDE.md`.
 
-The app does not create tables at startup. In MySQL Workbench connected to `db_pulse_meta`, first check whether `db_pulse_metric_snapshots` already exists. If it does not, run this safe `CREATE TABLE IF NOT EXISTS` statement. It creates only the DB-Pulse table and never drops or alters another table:
+### 5. Create the metadata database
+
+Create the database configured by `DB_NAME` in your local MySQL instance if it does not already exist.
+
+For example:
 
 ```sql
-CREATE TABLE IF NOT EXISTS `db_pulse_meta`.`db_pulse_metric_snapshots` (
-    `id` BIGINT NOT NULL AUTO_INCREMENT,
-    `captured_at` DATETIME(6) NOT NULL COMMENT 'UTC capture time',
-    `connected_connections` INT NULL,
-    `running_connections` INT NULL,
-    `max_connections` INT NULL,
-    `connection_utilization_percent` DECIMAL(5,2) NULL,
-    `server_uptime_seconds` BIGINT NULL,
-    `queries_since_start` BIGINT NULL,
-    `questions_since_start` BIGINT NULL,
-    `server_metrics_available` BOOLEAN NOT NULL,
-    `metrics_warning` VARCHAR(255) NULL,
-    PRIMARY KEY (`id`),
-    KEY `idx_db_pulse_metric_snapshots_captured_at` (`captured_at`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE DATABASE IF NOT EXISTS db_pulse_meta;
 ```
 
-The snapshot API inserts rows only into this table and reads history from this table. The account needs `SELECT` and `INSERT` access on it. Monitoring and alert GET requests do not create snapshots or write to any table.
+Use an appropriately permissioned database account. Some monitoring endpoints may need read access to MySQL performance or metadata views, while historical snapshots require write access to the DB-Pulse metadata tables.
 
-## Start the API
-
-From the project folder:
+### 6. Run the application
 
 ```powershell
 python -m uvicorn app.main:app --reload
 ```
 
-The API runs at http://127.0.0.1:8000. Swagger is at **http://127.0.0.1:8000/docs**.
+The API will normally be available at:
 
-## API endpoints
+- **API root:** http://127.0.0.1:8000/
+- **Health check:** http://127.0.0.1:8000/health
+- **Interactive API documentation:** http://127.0.0.1:8000/docs
 
-| Method | Path | Purpose |
-| --- | --- | --- |
-| GET | `/` | Welcome response |
-| GET | `/health` | App process health; does not check MySQL |
-| GET | `/monitoring` | Schema and available server metrics; read-only |
-| GET | `/locks` | Current visible transactions and lock waits |
-| POST | `/slow-queries/analyze` | Explainable text heuristics; does not execute SQL |
-| GET | `/partitions` | Partition metadata for the selected schema |
-| POST | `/history/snapshots` | Explicitly save one metric snapshot |
-| GET | `/history/snapshots?limit=20` | List recent snapshots; `limit` is 1-100 and defaults to 20 |
-| GET | `/alerts` | Evaluate current metrics and compare query counters to existing history |
+Use the Swagger UI to inspect endpoints and submit test requests.
 
-### Alert rules and defaults
+## API Endpoints
 
-`GET /alerts` is read-only. It calls the shared current-metric collector and reads at most the newest history row. It never calls `POST /history/snapshots` or writes a snapshot.
+The following endpoints are exposed by the application.
 
-Thresholds can be set in `.env`; the same optional defaults are listed in `.env.example`:
+| Method | Endpoint | Purpose |
+|---|---|---|
+| `GET` | `/` | Application information |
+| `GET` | `/health` | Health check |
+| `GET` | `/monitoring` | Database monitoring metrics |
+| `GET` | `/locks` | Lock and transaction information |
+| `GET` | `/partitions` | Partition metadata |
+| `GET` | `/alerts` | Current threshold-based alerts |
+| `GET` | `/history/snapshots` | Historical metric snapshots |
+| `POST` | `/history/snapshots` | Store a metric snapshot |
+| `POST` | `/slow-queries/analyze` | Analyze query text heuristically |
+| `POST` | `/queries/explain` | Retrieve MySQL `EXPLAIN` estimates |
+| `POST` | `/schema-drift/baseline` | Save a versioned schema baseline |
+| `GET` | `/schema-drift/audit` | Compare current schema with the baseline |
+| `GET` | `/pool/status` | Inspect connection pool statistics |
+| `POST` | `/backups/verify` | Run backup verification preflight checks |
 
-| Environment setting | Default | Rule |
-| --- | ---: | --- |
-| `DB_PULSE_ALERT_CONNECTION_WARNING_PERCENT` | 75 | Warning when connection utilization is at or above this percent |
-| `DB_PULSE_ALERT_CONNECTION_CRITICAL_PERCENT` | 90 | Critical when utilization is at or above this percent; must be greater than warning and at most 100 |
-| `DB_PULSE_ALERT_NEAR_MAX_WARNING_REMAINING` | 10 | Warning when this many or fewer connection slots remain |
-| `DB_PULSE_ALERT_NEAR_MAX_CRITICAL_REMAINING` | 2 | Critical when this many or fewer slots remain; must be less than the warning value |
-| `DB_PULSE_ALERT_QUERY_RATE_WARNING_PER_MINUTE` | 600 | Warning when the interval-average increase in global `Queries` reaches this count per minute |
+Exact response fields and request schemas are available in `/docs`.
 
-Connection utilization and low remaining capacity are separate signals, so both can appear at once. When a configured value is invalid or threshold ordering is inconsistent, `/alerts` returns a safe configuration error instead of evaluating with a guessed value.
+## Feature Setup Notes
 
-For query activity, DB-Pulse compares the current cumulative MySQL `Queries` counter with the newest explicit snapshot. It calculates a per-minute average only if the snapshot timestamp is earlier, the counters and uptimes are present, and the server uptime has not moved backward. This is an interval average for the whole MySQL server, not a live rate. With no snapshot, the endpoint returns an informational baseline alert. Counter reset or missing interval data is reported as not comparable, not as a high rate.
+### Schema Drift
 
-Unavailable current counters produce a warning alert; partial counter data produces an informational alert. Metrics that are absent are returned as unavailable and are not replaced with invented values. Database connection failures return a generic `503` response without credentials or raw connection details.
+Before running a schema audit, initialize the baseline storage table using the SQL documented in this repository's setup instructions.
 
-### Example alert response
+Then:
 
-Values below are examples; current counters and emitted alerts depend on the database and thresholds.
+1. Call `POST /schema-drift/baseline` to capture the initial schema baseline.
+2. Call `GET /schema-drift/audit` to compare the current schema with the saved baseline.
+3. Review the reported structural differences.
 
-```json
-{
-  "status": "evaluated",
-  "alert_count": 2,
-  "history_comparison": "available",
-  "thresholds": {
-    "connection_warning_percent": 75.0,
-    "connection_critical_percent": 90.0,
-    "near_max_warning_remaining": 10,
-    "near_max_critical_remaining": 2,
-    "query_rate_warning_per_minute": 600.0
-  },
-  "alerts": [
-    {
-      "code": "CONNECTION_UTILIZATION_HIGH",
-      "severity": "warning",
-      "title": "MySQL connection utilization is elevated",
-      "metric": "connections.utilization_percent",
-      "observed_value": 82.5,
-      "threshold": 75.0,
-      "explanation": "Connection use is above the warning threshold. This is a risk signal, not proof that the server is failing.",
-      "suggested_action": "Review connection-pool sizes and whether applications release connections promptly."
-    },
-    {
-      "code": "QUERY_ACTIVITY_INCREASED",
-      "severity": "warning",
-      "title": "Query activity between snapshots is elevated",
-      "metric": "query_activity.queries_per_minute_since_snapshot",
-      "observed_value": 700.0,
-      "threshold": 600.0,
-      "explanation": "MySQL's cumulative Queries counter increased during the saved interval. This is an interval average across the whole server, not an instantaneous rate.",
-      "suggested_action": "Review workload changes and use MySQL statement statistics or application logs to identify which clients account for the increase."
-    }
-  ],
-  "read_only": true,
-  "snapshot_saved": false
-}
-```
+Creating a baseline changes DB-Pulse metadata. Follow the endpoint's confirmation requirements before recording a replacement baseline.
 
-Each alert has a stable `code`, severity, observed value when known, threshold, explanation, and suggested action. No alerts means no configured rule fired; it does not guarantee that every part of MySQL is healthy.
+### Backup Preflight
 
-### Try alerts in Swagger
+Configure `DB_PULSE_BACKUP_DIR` locally to point to a dedicated directory containing disposable test backups. Use a small UTF-8 `.sql` fixture to test the endpoint.
 
-1. Initialize `db_pulse_metric_snapshots` using the SQL above.
-2. Start the API and open **http://127.0.0.1:8000/docs**.
-3. Optional: call `POST /history/snapshots` to save a baseline.
-4. Call `GET /alerts` to evaluate current counters. Call `POST /history/snapshots` again after a while if you want a real query-counter interval to compare.
-5. To try threshold alerts locally, change a `DB_PULSE_ALERT_*` value in `.env`, restart Uvicorn, and call `GET /alerts` again. Keep the warning connection percent lower than critical and near-max warning remaining higher than critical.
+A successful preflight does not prove that a backup can be restored. Do not use production backups or production databases for experiments.
 
-Other Swagger examples: `GET /monitoring`, `GET /locks`, `GET /partitions`, and `POST /slow-queries/analyze` with `{"query":"SELECT * FROM users"}`.
+### Connection Pool Monitoring
 
-## Tests
+Use `GET /pool/status` to inspect the application's SQLAlchemy connection pool. Interpret pool metrics in the context of current application activity; a high checked-out count alone does not prove that connections are leaking.
+
+## Running Tests
+
+Activate the virtual environment and run:
 
 ```powershell
 python -m pytest -q
 ```
 
-Alert and history tests mock database connections, so the automated suite does not need MySQL. A real Swagger check is useful for verifying your local MySQL permissions and history table.
+The advanced-feature development run completed with **60 passing tests**. Test results may change as the project evolves.
 
-## Limitations and troubleshooting
-
-- Connection counts, uptime, and query counters are server-wide. Cumulative counters are not live rates.
-- Alerts are warning signals, not a diagnosis that MySQL is failing. The suggested actions are investigation steps, not automatic fixes.
-- Query-counter comparison requires at least one readable snapshot with a comparable uptime and positive time interval. A restart invalidates a direct comparison.
-- No scheduler, automatic snapshot collection, retention, or deletion endpoint exists. Snapshots are added only by the explicit POST.
-- Approximate table statistics can be stale; lock information is a current view and does not show every historical deadlock.
-- **Invalid alert configuration:** check the five `DB_PULSE_ALERT_*` settings above. Connection warning must be below critical; remaining warning must be above critical; query rate must be positive.
-- **History comparison unavailable:** initialize the table and confirm the account can read it. Current metric alerts can still be evaluated.
-- **Connection refused:** check the Windows `MySQL80` service and `DB_HOST`/`DB_PORT`.
-- **History endpoint returns 409:** make sure `DB_NAME=db_pulse_meta`; history and alerts refuse other schemas.
-- **Port 8000 is busy:** use `python -m uvicorn app.main:app --reload --port 8001`.
-
-## Interview explanation
-
-"The alert endpoint reuses the same MySQL metric collector as monitoring and compares the current cumulative query counter to an explicitly saved timestamped snapshot. Thresholds are validated, alerts explain the evidence and next action, and the GET request never writes data. A query rate is only calculated over a positive, comparable snapshot interval, so it is not mislabeled as live throughput."
-
-## Beginner setup, architecture, and request flow
-
-DB-Pulse is a small backend project for checking selected MySQL health information from one API. It brings connection and query counters, currently visible lock information, schema partition metadata, safe text-based query suggestions, optional history, and threshold-based alerts into a single Swagger interface.
-
-The request flow is:
-
-```mermaid
-flowchart LR
-    User[User or Swagger] --> API[FastAPI routes]
-    API --> Metrics[Shared read-only metric collector]
-    Metrics --> MySQL[(MySQL 8)]
-    API --> History[Snapshot history routes]
-    History --> Table[(db_pulse_meta.db_pulse_metric_snapshots)]
-    Alerts[Alert route] --> Metrics
-    Alerts --> Table
-```
-
-`GET /health` checks the application process only. Database-backed routes use the configured SQLAlchemy engine. The alert route reuses the shared metrics and reads history when available. Only an explicit `POST /history/snapshots` adds a history row.
-
-### Prerequisites and reproducible Windows setup
-
-Install Python 3.10 or newer and MySQL Server 8.0. Make sure the local MySQL service is running. From PowerShell:
+Check the working tree for whitespace issues with:
 
 ```powershell
 Set-Location 'C:\path\to\DB-Pulse'
@@ -274,74 +315,3 @@ A successful `GET /health` response has `status` and `project` fields. Monitorin
 - **What would you add next?** A configurable retention policy and an optional scheduler could be considered after the current manual snapshot flow is well tested and clearly documented.
 
 For a timed walkthrough, see [`DEMO_GUIDE.md`](DEMO_GUIDE.md).
-
-## Advanced operations modules
-
-These additions are independent API modules and do not replace the original heuristic endpoint `POST /slow-queries/analyze`.
-
-### `POST /queries/explain`
-
-Submits JSON such as `{"query":"SELECT id, name FROM users WHERE id = 10"}`. DB-Pulse validates a conservative single-`SELECT` subset and issues MySQL `EXPLAIN` to return optimizer plan rows, including fields like table, access type, possible/selected keys, and estimated rows when MySQL supplies them. It never executes the submitted SELECT and never uses `EXPLAIN ANALYZE`. Empty input, oversize input, comments, multiple statements, non-SELECT, CTEs, qualified identifiers (including other database names), and selected side-effect or unsupported tokens are rejected. This is intentionally conservative and not a complete SQL parser. Plans are estimates, not measured execution behavior. Use a least-privilege MySQL account.
-
-### Schema drift baseline and audit
-
-Before using `POST /schema-drift/baseline`, initialize this DB-Pulse-owned table if absent. It stores versioned schema metadata only; it does not modify monitored application tables:
-
-```sql
-CREATE TABLE IF NOT EXISTS `db_pulse_meta`.`db_pulse_schema_baselines` (
-    `id` BIGINT NOT NULL AUTO_INCREMENT,
-    `created_at` DATETIME(6) NOT NULL,
-    `schema_name` VARCHAR(64) NOT NULL,
-    `metadata_json` JSON NOT NULL,
-    PRIMARY KEY (`id`),
-    KEY `idx_db_pulse_schema_baselines_created_at` (`created_at`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-```
-
-`POST /schema-drift/baseline` creates the first baseline. Replacing the approved reference requires explicit JSON `{"confirm_replace":true}`; prior versions are retained. `GET /schema-drift/audit` compares the newest baseline with current columns in the configured schema and reports added/removed tables and columns plus changed type, nullability, default, key, or position fields. Defaults for credential-related columns or credential-looking strings are redacted in the saved baseline and response. The baseline table itself is excluded. The service account needs metadata read access and `SELECT`/`INSERT` on this dedicated table. Drift reports structural differences only; they do not identify who changed a schema or whether the change was unauthorized. Audit does not repair anything.
-
-### `GET /pool/status`
-
-Reads supported counters directly from the existing SQLAlchemy pool without opening a connection: pool size, checked-out/in connections, overflow, timeout, and an estimated utilization percentage when a finite capacity is available. `DB_PULSE_POOL_WARNING_PERCENT` defaults to 75; `DB_PULSE_POOL_CRITICAL_PERCENT` defaults to 90 and must be greater than warning (both range 1–100). Unsupported statistics are `null`. SQLAlchemy checkout/checkin events track only active connection-record IDs and aggregate durations, not connection objects or unbounded history; hooks are detached on app shutdown. Pool pressure is a signal, not proof of a connection leak. Existing pool settings are unchanged.
-
-### `POST /backups/verify` (preflight only)
-
-Submit `{"backup_filename":"daily.sql"}`. Configure `DB_PULSE_BACKUP_DIR` to an existing local directory. DB-Pulse accepts only a filename inside that directory, resolves it to reject escapes, allows a non-empty UTF-8 `.sql` file up to `DB_PULSE_BACKUP_MAX_BYTES` (default 100 MiB, maximum 10 GiB), and checks whether the `mysql` client exists. `DB_PULSE_BACKUP_TIMEOUT_SECONDS` defaults to 60 and is reserved for a future restore workflow.
-
-**Restore verification is not implemented.** The endpoint never invokes a subprocess, parses or executes SQL, creates a database, or performs cleanup. A successful preflight means only that basic file checks and the client availability check passed. Untrusted SQL dumps can contain dangerous statements. Any future restore implementation must use a dedicated disposable database, separate restricted credentials, strong isolation, confirmation, bounded execution, and sandbox-only cleanup. No sandbox restore credentials are currently read or required.
-
-### Advanced-module tests and Swagger
-
-The four modules include mocked/pure unit tests so these checks do not require a live MySQL instance or restore. Run all tests with `\.venv\Scripts\python.exe -m pytest -q`, then open `/docs` and try `POST /queries/explain`, `POST /schema-drift/baseline`, `GET /schema-drift/audit`, `GET /pool/status`, and `POST /backups/verify`. Schema drift requires its explicit table initialization; backup preflight requires a configured backup folder and a test SQL file. Do not use an untrusted dump as a demonstration artifact.
-
-
-### Example responses for the advanced routes
-
-The values below are illustrative response shapes, not claims about the current MySQL instance.
-
-`POST /queries/explain`:
-
-```json
-{"plan":[{"id":1,"select_type":"SIMPLE","table":"users","type":"const","possible_keys":"PRIMARY","key":"PRIMARY","rows":1}],"warnings":["Estimated row counts are optimizer estimates, not measured rows or runtime."],"read_only":true,"explain_analyze_used":false,"limitations":["EXPLAIN reports optimizer estimates and does not guarantee actual runtime performance."]}
-```
-
-`GET /pool/status`:
-
-```json
-{"status":"normal","statistics":{"pool_size":5,"checked_out":1,"checked_in":4,"overflow":0,"configured_timeout_seconds":10,"capacity_estimate":10,"utilization_percent":10.0},"checkout_duration":{"available":true,"active_tracked":1,"longest_active_seconds":0.02,"longest_completed_seconds":0.15},"thresholds":{"warning_percent":75.0,"critical_percent":90.0},"read_only":true}
-```
-
-`POST /backups/verify` (preflight only):
-
-```json
-{"status":"preflight_complete","backup_filename":"daily.sql","size_bytes":128,"maximum_size_bytes":104857600,"file_type":"plain UTF-8 SQL text (basic check only)","mysql_client_available":true,"configured_timeout_seconds":60,"preflight_passed":true,"restore_implemented":false,"restore_performed":false}
-```
-
-A schema audit response includes the baseline id, UTC audit timestamp, and a `differences` object with added/removed tables and columns, changed columns, and an `unchanged` flag. No baseline returns HTTP 404; a repeated baseline save without `confirm_replace=true` returns HTTP 409.
-
-
-Example `GET /schema-drift/audit` response shape (differences vary by the live schema):
-
-```json
-{"baseline_id":1,"baseline_created_at":"2026-10-17T10:00:00Z","audited_at":"2026-10-17T10:05:00Z","schema":"db_pulse_meta","differences":{"added_tables":[],"removed_tables":[],"added_columns":[],"removed_columns":[],"changed_columns":[],"unchanged":true},"note":"Metadata comparison reports structural differences; it cannot identify who made a change or whether it was unauthorized without separate MySQL audit logs."}
-```
